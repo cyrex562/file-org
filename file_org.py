@@ -118,7 +118,7 @@ def move_duplicates(csv_file, duplicates_dir):
             # Keep the first file, move the rest
             for i, file_path in enumerate(files[1:], start=1):
                 if not os.path.exists(file_path):
-                    logging.warning(f"File not found: {file_path}")
+                    logging.warning(f"File not found (already moved or deleted?): {file_path}")
                     continue
                 base_name = os.path.basename(file_path)
                 name, ext = os.path.splitext(base_name)
@@ -130,8 +130,18 @@ def move_duplicates(csv_file, duplicates_dir):
                     dest_name = f"{name}_{n}{ext}"
                     dest_path = os.path.join(duplicates_dir, dest_name)
                     n += 1
-                shutil.move(file_path, dest_path)
-                logging.info(f"Moved duplicate: {file_path} -> {dest_path}")
+                try:
+                    shutil.move(file_path, dest_path)
+                    logging.info(f"Moved duplicate: {file_path} -> {dest_path}")
+                except PermissionError as e:
+                    try:
+                        shutil.copy2(file_path, dest_path)
+                        os.remove(file_path)
+                        logging.info(f"Copied and removed (move fallback): {file_path} -> {dest_path}")
+                    except Exception as ce:
+                        logging.error(f"Failed to copy+remove {file_path} to {dest_path}: {ce}")
+                except Exception as e:
+                    logging.error(f"Failed to move {file_path} to {dest_path}: {e}")
                 moved_count += 1
     logging.info(f"Total duplicates moved: {moved_count}")
 
