@@ -8,6 +8,8 @@ from tqdm import tqdm
 from rich.logging import RichHandler
 from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn, TimeRemainingColumn, TaskProgressColumn, TransferSpeedColumn
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import shutil
+from collections import defaultdict
 
 # Configure rich logging
 logging.basicConfig(
@@ -69,24 +71,71 @@ def create_file_list(directory, output_csv, workers):
             TextColumn("[progress.description]{task.description}"),
             BarColumn(),
             TaskProgressColumn(),
-            TransferSpeedColumn(),
+            TextColumn("{task.completed}/{task.total} files"),
+            TextColumn("| {task.fields[throughput]:.2f} files/sec"),
             TimeElapsedColumn(),
             TimeRemainingColumn(),
             transient=True
         ) as progress:
-            task = progress.add_task("Processing files", total=total_files)
-            results = []
+            task = progress.add_task(
+                "Processing files", total=total_files, throughput=0.0
+            )
+            start_time = time.time()
+            processed = 0
             with ThreadPoolExecutor(max_workers=workers) as executor:
                 future_to_path = {executor.submit(process_file, path): path for path in file_paths}
                 for future in as_completed(future_to_path):
                     result = future.result()
+                    processed += 1
+                    elapsed = time.time() - start_time
+                    throughput = processed / elapsed if elapsed > 0 else 0.0
                     if result:
                         writer.writerow(result)
-                    progress.update(task, advance=1)
+                    progress.update(task, advance=1, throughput=throughput)
 
     logging.info(f"File list saved to: {output_csv}")
 
 cli.add_command(create_file_list)
+
+@click.command()
+@click.argument('csv_file', type=click.Path(exists=True, dir_okay=False))
+@click.argument('duplicates_dir', type=click.Path())
+def move_duplicates(csv_file, duplicates_dir):
+    """Find duplicate xxhash values in CSV_FILE and move those files to DUPLICATES_DIR."""
+    os.makedirs(duplicates_dir, exist_ok=True)
+
+    # Read CSV and group by xxhash
+    hash_to_files = defaultdict(list)
+    with open(csv_file, 'r', encoding='utf-8') as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            hash_to_files[row['xxhash']].append(row['full_path'])
+
+    # Find and move duplicates
+    moved_count = 0
+    for file_hash, files in hash_to_files.items():
+        if len(files) > 1:
+            # Keep the first file, move the rest
+            for i, file_path in enumerate(files[1:], start=1):
+                if not os.path.exists(file_path):
+                    logging.warning(f"File not found: {file_path}")
+                    continue
+                base_name = os.path.basename(file_path)
+                name, ext = os.path.splitext(base_name)
+                dest_name = base_name
+                dest_path = os.path.join(duplicates_dir, dest_name)
+                n = 1
+                # Append a number if file exists
+                while os.path.exists(dest_path):
+                    dest_name = f"{name}_{n}{ext}"
+                    dest_path = os.path.join(duplicates_dir, dest_name)
+                    n += 1
+                shutil.move(file_path, dest_path)
+                logging.info(f"Moved duplicate: {file_path} -> {dest_path}")
+                moved_count += 1
+    logging.info(f"Total duplicates moved: {moved_count}")
+
+cli.add_command(move_duplicates)
 
 if __name__ == '__main__':
     cli()
