@@ -147,5 +147,68 @@ def move_duplicates(csv_file, duplicates_dir):
 
 cli.add_command(move_duplicates)
 
+@click.command()
+@click.argument('target_dir', type=click.Path(exists=True, file_okay=False, dir_okay=True))
+def flatten_directory(target_dir):
+    """Move all files from subfolders into TARGET_DIR, renaming duplicates, and remove subdirectories."""
+    from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TaskProgressColumn, TimeElapsedColumn, TimeRemainingColumn
+    file_paths = []
+    # Collect all files in subdirectories
+    for root, _, files in os.walk(target_dir):
+        if os.path.abspath(root) == os.path.abspath(target_dir):
+            continue  # skip top-level
+        for file in files:
+            file_paths.append(os.path.join(root, file))
+    total_files = len(file_paths)
+    logging.info(f"Total files to move: {total_files}")
+    moved_count = 0
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TextColumn("{task.completed}/{task.total} files"),
+        TimeElapsedColumn(),
+        TimeRemainingColumn(),
+        transient=True
+    ) as progress:
+        task = progress.add_task("Flattening directory", total=total_files)
+        for src_path in file_paths:
+            base_name = os.path.basename(src_path)
+            name, ext = os.path.splitext(base_name)
+            dest_name = base_name
+            dest_path = os.path.join(target_dir, dest_name)
+            n = 1
+            while os.path.exists(dest_path):
+                dest_name = f"{name}_{n}{ext}"
+                dest_path = os.path.join(target_dir, dest_name)
+                n += 1
+            try:
+                shutil.move(src_path, dest_path)
+                logging.info(f"Moved: {src_path} -> {dest_path}")
+            except PermissionError:
+                try:
+                    shutil.copy2(src_path, dest_path)
+                    os.remove(src_path)
+                    logging.info(f"Copied and removed (move fallback): {src_path} -> {dest_path}")
+                except Exception as ce:
+                    logging.error(f"Failed to copy+remove {src_path} to {dest_path}: {ce}")
+            except Exception as e:
+                logging.error(f"Failed to move {src_path} to {dest_path}: {e}")
+            moved_count += 1
+            progress.update(task, advance=1)
+    # Remove empty subdirectories
+    for root, dirs, _ in os.walk(target_dir, topdown=False):
+        for d in dirs:
+            dir_path = os.path.join(root, d)
+            try:
+                os.rmdir(dir_path)
+                logging.info(f"Removed empty directory: {dir_path}")
+            except OSError:
+                pass  # Directory not empty or error
+    logging.info(f"Flatten complete. Total files moved: {moved_count}")
+
+cli.add_command(flatten_directory)
+
 if __name__ == '__main__':
     cli()
