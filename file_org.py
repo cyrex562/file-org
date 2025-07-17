@@ -189,10 +189,15 @@ def flatten_directory(target_dir):
             except PermissionError:
                 try:
                     shutil.copy2(src_path, dest_path)
-                    os.remove(src_path)
-                    logging.info(f"Copied and removed (move fallback): {src_path} -> {dest_path}")
+                    try:
+                        os.remove(src_path)
+                        logging.info(f"Copied and removed (move fallback): {src_path} -> {dest_path}")
+                    except PermissionError:
+                        logging.warning(f"Copied but could not delete original (permission denied): {src_path}")
+                    except Exception as ce:
+                        logging.error(f"Copied but failed to delete original {src_path}: {ce}")
                 except Exception as ce:
-                    logging.error(f"Failed to copy+remove {src_path} to {dest_path}: {ce}")
+                    logging.error(f"Failed to copy {src_path} to {dest_path}: {ce}")
             except Exception as e:
                 logging.error(f"Failed to move {src_path} to {dest_path}: {e}")
             moved_count += 1
